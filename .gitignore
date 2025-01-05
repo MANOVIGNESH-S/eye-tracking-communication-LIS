@@ -1,0 +1,59 @@
+# Ignore virtual environment
+venv/
+ENV/
+env/
+
+# Python bytecode files
+*.py[cod]
+__pycache__/
+*.pyo
+*.pyd
+
+# Logs and debug files
+*.log
+*.out
+*.err
+
+# Environment variables
+*.env
+.env
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# System files
+.DS_Store
+Thumbs.db
+
+# IDE/Editor specific files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Testing and Coverage
+.pytest_cache/
+.coverage
+.tox/
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+
+# Distribution/Packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+MANIFEST
+
+# Node.js (if applicable)
+node_modules/
+
+# Compiled C extensions
+*.so
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
