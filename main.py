@@ -1,23 +1,14 @@
 import tkinter as tk
 from tkinter import messagebox
 import subprocess
-
 import cv2
 import mediapipe as mp
 import numpy as np
 import json
 import os
-
-
-import cv2
-import mediapipe as mp
-import numpy as np
+from PIL import Image, ImageTk
 import time
 
-
-import cv2
-import mediapipe as mp
-import numpy as np
 
 class EyeTrackingGame:
     def __init__(self):
@@ -33,34 +24,44 @@ class EyeTrackingGame:
         # Window setup
         self.window_width = 1280
         self.window_height = 720
-        self.window_name = 'Eye Tracking Game'
+        self.window_name = 'EyeTalk: Communication Aid'
         cv2.namedWindow(self.window_name, cv2.WINDOW_NORMAL)
         cv2.resizeWindow(self.window_name, self.window_width, self.window_height)
 
-        # Cursor parameters
+        # Cursor parameters - use global configuration instead of local values
         self.cursor_x = self.window_width // 2
         self.cursor_y = self.window_height // 2
-        self.movement_unit = 10
-        self.vertical_sensitivity = 1.0
-        self.horizontal_sensitivity = 1.0
-        self.smoothing = 0.2
 
-        # Game objects
-        self.objects = [
-            {"pos": (100, 100), "color": (0, 0, 255), "name": "Red", "clicked": False},
-            {"pos": (1180, 100), "color": (0, 255, 0), "name": "Green", "clicked": False},
-            {"pos": (100, 620), "color": (255, 0, 0), "name": "Blue", "clicked": False},
-            {"pos": (1180, 620), "color": (255, 255, 0), "name": "Yellow", "clicked": False}
+        # Don't need these local variables anymore, use global_config instead
+        # self.movement_unit = 10
+        # self.vertical_sensitivity = 1.0
+        # self.horizontal_sensitivity = 1.0
+        # self.smoothing = 0.2
+
+        # Communication targets
+        self.messages = [
+            {"text": "I'm hungry", "pos": (50, 50), "hover_time": 0, "color": (0, 150, 255)},
+            {"text": "I'm thirsty", "pos": (self.window_width - 250, 50), "hover_time": 0, "color": (0, 255, 150)},
+            {"text": "Restroom", "pos": (50, self.window_height - 100), "hover_time": 0, "color": (255, 100, 0)},
+            {"text": "Emergency", "pos": (self.window_width - 250, self.window_height - 100), "hover_time": 0,
+             "color": (255, 50, 50)}
         ]
-        self.object_radius = 30
-        self.score = 0
+
+        # Initialize text bounding boxes
+        for msg in self.messages:
+            self.init_text_object(msg)
+
+        # Dialog management
+        self.selected_message = None
+        self.close_button_bbox = None
+        self.close_button_hover_time = 0
 
         # Camera setup
         self.cap = cv2.VideoCapture(0)
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
 
-        # Calibration and reference points
+        # Calibration parameters
         self.center_left_eye = None
         self.center_right_eye = None
         self.calibrated = False
@@ -73,16 +74,47 @@ class EyeTrackingGame:
         self.LEFT_IRIS = [474, 475, 476, 477]
         self.RIGHT_IRIS = [469, 470, 471, 472]
 
-        # Create blank canvas
+        # Create canvas
         self.canvas = np.zeros((self.window_height, self.window_width, 3), dtype=np.uint8)
+
+        # Load global configuration at initialization
+        try:
+            load_global_configuration()
+            print("Global configuration loaded for EyeTrackingGame")
+        except NameError:
+            # If the function is not defined (we're in the same file)
+            print("Using already loaded global configuration")
+
+    def init_text_object(self, msg):
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 0.8
+        thickness = 2
+        (text_width, text_height), _ = cv2.getTextSize(msg["text"], font, font_scale, thickness)
+
+        # Calculate text position and bounding box
+        x, y = msg["pos"]
+        padding = 15
+        msg.update({
+            "font": font,
+            "font_scale": font_scale,
+            "thickness": thickness,
+            "text_width": text_width,
+            "text_height": text_height,
+            "bbox": (
+                x - padding,
+                y - padding,
+                x + text_width + padding,
+                y + text_height + padding
+            )
+        })
 
     def get_eye_centers(self, landmarks):
         left_iris = np.array([(landmarks.landmark[i].x * self.window_width,
-                              landmarks.landmark[i].y * self.window_height)
-                             for i in self.LEFT_IRIS])
-        right_iris = np.array([(landmarks.landmark[i].x * self.window_width,
                                landmarks.landmark[i].y * self.window_height)
-                              for i in self.RIGHT_IRIS])
+                              for i in self.LEFT_IRIS])
+        right_iris = np.array([(landmarks.landmark[i].x * self.window_width,
+                                landmarks.landmark[i].y * self.window_height)
+                               for i in self.RIGHT_IRIS])
 
         left_center = np.mean(left_iris, axis=0)
         right_center = np.mean(right_iris, axis=0)
@@ -95,7 +127,7 @@ class EyeTrackingGame:
         self.cursor_x = self.window_width // 2
         self.cursor_y = self.window_height // 2
         self.calibrated = True
-        print(f"Calibrated - Movement unit: {self.movement_unit} pixels")
+        print(f"Calibration complete! Using movement unit: {global_config['movement_unit']}")
 
     def calculate_movement(self, left_center, right_center):
         if not self.calibrated:
@@ -106,66 +138,142 @@ class EyeTrackingGame:
         left_dev_y = left_center[1] - self.center_left_eye[1]
         right_dev_y = right_center[1] - self.center_right_eye[1]
 
-        dx = ((left_dev_x + right_dev_x) / 2) * self.movement_unit * self.horizontal_sensitivity
-        dy = ((left_dev_y + right_dev_y) / 2) * self.movement_unit * self.vertical_sensitivity
+        # Use global configuration values
+        dx = ((left_dev_x + right_dev_x) / 2) * global_config['movement_unit'] * global_config['horizontal_sensitivity']
+        dy = ((left_dev_y + right_dev_y) / 2) * global_config['movement_unit'] * global_config['vertical_sensitivity']
 
         return dx, dy
 
     def smooth_movement(self, x, y):
-        self.moving_avg_x = (self.moving_avg_x * (1 - self.smoothing) + x * self.smoothing)
-        self.moving_avg_y = (self.moving_avg_y * (1 - self.smoothing) + y * self.smoothing)
+        # Use global smoothing factor
+        self.moving_avg_x = (self.moving_avg_x * (1 - global_config['smoothing']) +
+                             x * global_config['smoothing'])
+        self.moving_avg_y = (self.moving_avg_y * (1 - global_config['smoothing']) +
+                             y * global_config['smoothing'])
         return self.moving_avg_x, self.moving_avg_y
 
-    def check_object_collision(self):
-        for obj in self.objects:
-            if not obj["clicked"]:
-                distance = np.sqrt((self.cursor_x - obj["pos"][0])**2 +
-                                 (self.cursor_y - obj["pos"][1])**2)
-                if distance < self.object_radius:
-                    obj["clicked"] = True
-                    self.score += 1
-                    print(f"Clicked {obj['name']}! Score: {self.score}")
-                    if self.score == len(self.objects):
-                        print("Congratulations! You've clicked all objects!")
-                        return True
-        return False
+    def check_interactions(self):
+        if self.selected_message:
+            # Check close button interaction
+            if self.close_button_bbox:
+                x1, y1, x2, y2 = self.close_button_bbox
+                if (x1 <= self.cursor_x <= x2) and (y1 <= self.cursor_y <= y2):
+                    self.close_button_hover_time += 1
+                    if self.close_button_hover_time >= 15:  # 0.5 seconds at 30 FPS
+                        self.selected_message = None
+                        self.close_button_hover_time = 0
+                else:
+                    self.close_button_hover_time = 0
+            return
+
+        # Check text box interactions
+        for msg in self.messages:
+            x1, y1, x2, y2 = msg["bbox"]
+            if (x1 <= self.cursor_x <= x2) and (y1 <= self.cursor_y <= y2):
+                msg["hover_time"] += 1
+                if msg["hover_time"] >= 30:  # 1 second at 30 FPS
+                    self.selected_message = msg["text"]
+                    msg["hover_time"] = 0
+            else:
+                msg["hover_time"] = 0
 
     def draw_interface(self):
-        # Clear canvas
         self.canvas.fill(0)
 
-        # Draw objects
-        for obj in self.objects:
-            color = obj["color"] if not obj["clicked"] else (128, 128, 128)
-            cv2.circle(self.canvas, obj["pos"], self.object_radius, color, -1)
+        # Draw message boxes with hover effects
+        for msg in self.messages:
+            x1, y1, x2, y2 = msg["bbox"]
+            color = msg["color"]
+            hover_progress = min(msg["hover_time"] / 30, 1.0)  # Normalize hover time
+
+            # Draw background with hover effect
+            bg_color = tuple(int(c * (0.5 + 0.5 * hover_progress)) for c in color)
+            cv2.rectangle(self.canvas, (x1, y1), (x2, y2), bg_color, -1, cv2.LINE_AA)
+            cv2.rectangle(self.canvas, (x1, y1), (x2, y2), (255, 255, 255), 2, cv2.LINE_AA)
+
+            # Draw text
+            text_x = x1 + 10
+            text_y = y2 - 10
+            cv2.putText(self.canvas, msg["text"], (text_x, text_y),
+                        msg["font"], msg["font_scale"], (255, 255, 255), msg["thickness"], cv2.LINE_AA)
+
+            # Draw progress bar
+            if hover_progress > 0:
+                bar_height = 5
+                bar_width = int((x2 - x1) * hover_progress)
+                cv2.rectangle(self.canvas, (x1, y2), (x1 + bar_width, y2 + bar_height), (255, 255, 255), -1)
+
+        # Draw dialog if message selected
+        if self.selected_message:
+            # Darken background
+            overlay = self.canvas.copy()
+            cv2.rectangle(overlay, (0, 0), (self.window_width, self.window_height), (0, 0, 0, 0.7), -1)
+            cv2.addWeighted(overlay, 0.7, self.canvas, 0.3, 0, self.canvas)
+
+            # Draw dialog box
+            dialog_w, dialog_h = 600, 200
+            x = self.window_width // 2 - dialog_w // 2
+            y = self.window_height // 2 - dialog_h // 2
+            cv2.rectangle(self.canvas, (x, y), (x + dialog_w, y + dialog_h), (255, 255, 255), -1, cv2.LINE_AA)
+            cv2.rectangle(self.canvas, (x, y), (x + dialog_w, y + dialog_h), (0, 0, 0), 2, cv2.LINE_AA)
+
+            # Draw message
+            text_size = cv2.getTextSize(self.selected_message, cv2.FONT_HERSHEY_SIMPLEX, 1.2, 2)[0]
+            text_x = x + (dialog_w - text_size[0]) // 2
+            text_y = y + (dialog_h + text_size[1]) // 2
+            cv2.putText(self.canvas, self.selected_message, (text_x, text_y),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 0), 2, cv2.LINE_AA)
+
+            # Draw close button
+            btn_size = 30
+            btn_x = x + dialog_w - btn_size - 20
+            btn_y = y + 20
+            self.close_button_bbox = (btn_x, btn_y, btn_x + btn_size, btn_y + btn_size)
+            cv2.rectangle(self.canvas, (btn_x, btn_y), (btn_x + btn_size, btn_y + btn_size), (0, 0, 255), -1,
+                          cv2.LINE_AA)
+            cv2.line(self.canvas, (btn_x, btn_y), (btn_x + btn_size, btn_y + btn_size), (255, 255, 255), 2, cv2.LINE_AA)
+            cv2.line(self.canvas, (btn_x + btn_size, btn_y), (btn_x, btn_y + btn_size), (255, 255, 255), 2, cv2.LINE_AA)
 
         # Draw cursor
         cursor_size = 20
-        cv2.line(self.canvas,
-                 (int(self.cursor_x - cursor_size), int(self.cursor_y)),
-                 (int(self.cursor_x + cursor_size), int(self.cursor_y)),
-                 (0, 255, 0), 2)
-        cv2.line(self.canvas,
-                 (int(self.cursor_x), int(self.cursor_y - cursor_size)),
-                 (int(self.cursor_x), int(self.cursor_y + cursor_size)),
-                 (0, 255, 0), 2)
+        cv2.line(self.canvas, (int(self.cursor_x - cursor_size), int(self.cursor_y)),
+                 (int(self.cursor_x + cursor_size), int(self.cursor_y)), (0, 255, 0), 2, cv2.LINE_AA)
+        cv2.line(self.canvas, (int(self.cursor_x), int(self.cursor_y - cursor_size)),
+                 (int(self.cursor_x), int(self.cursor_y + cursor_size)), (0, 255, 0), 2, cv2.LINE_AA)
 
-        # Draw score and instructions
-        cv2.putText(self.canvas, f"Score: {self.score}", (10, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+        # Draw calibration instructions
         if not self.calibrated:
-            cv2.putText(self.canvas, "Look at center and press 'c' to calibrate",
-                       (self.window_width//2 - 200, self.window_height//2),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            cv2.putText(self.canvas, "Look straight ahead and press 'c' to calibrate",
+                        (self.window_width // 2 - 250, self.window_height // 2),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
+
+        # Display current configuration values
+        cv2.putText(self.canvas, f"Movement Unit: {global_config['movement_unit']}",
+                    (10, self.window_height - 130),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 1, cv2.LINE_AA)
+        cv2.putText(self.canvas, f"Vertical Sensitivity: {global_config['vertical_sensitivity']:.2f}",
+                    (10, self.window_height - 100),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 1, cv2.LINE_AA)
+        cv2.putText(self.canvas, f"Horizontal Sensitivity: {global_config['horizontal_sensitivity']:.2f}",
+                    (10, self.window_height - 70),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 1, cv2.LINE_AA)
+        cv2.putText(self.canvas, f"Smoothing: {global_config['smoothing']:.2f}",
+                    (10, self.window_height - 40),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 1, cv2.LINE_AA)
 
         return self.canvas
 
     def run(self):
-        print("Starting Eye Tracking Game...")
-        print("Look at the center and press 'c' to calibrate")
+        print("Starting EyeTalk: Communication Aid...")
+        print(f"Using global movement unit: {global_config['movement_unit']}")
+        print(f"Using global vertical sensitivity: {global_config['vertical_sensitivity']}")
+        print(f"Using global horizontal sensitivity: {global_config['horizontal_sensitivity']}")
+        print(f"Using global smoothing: {global_config['smoothing']}")
+        print("Calibrate first by looking straight ahead and pressing 'c'")
         print("Move your eyes to control the cursor")
-        print("Click objects by looking at them")
+        print("Dwell on a message for 1 second to select it")
         print("Press 'q' to quit")
+        print("Press 's' to save current configuration")
 
         try:
             while True:
@@ -184,34 +292,54 @@ class EyeTrackingGame:
                     if self.calibrated:
                         dx, dy = self.calculate_movement(left_center, right_center)
                         smooth_x, smooth_y = self.smooth_movement(dx, dy)
+                        self.cursor_x = int(np.clip(self.window_width // 2 + smooth_x, 0, self.window_width))
+                        self.cursor_y = int(np.clip(self.window_height // 2 + smooth_y, 0, self.window_height))
 
-                        new_x = self.window_width // 2 + smooth_x
-                        new_y = self.window_height // 2 + smooth_y
+                    self.check_interactions()
 
-                        self.cursor_x = max(0, min(self.window_width, new_x))
-                        self.cursor_y = max(0, min(self.window_height, new_y))
-
-                        if self.check_object_collision():
-                            print("Game Complete!")
-
-                # Draw game interface
-                game_display = self.draw_interface()
-                cv2.imshow(self.window_name, game_display)
+                # Draw interface and display
+                cv2.imshow(self.window_name, self.draw_interface())
 
                 key = cv2.waitKey(1) & 0xFF
                 if key == ord('q'):
                     break
                 elif key == ord('c') and results.multi_face_landmarks:
                     self.calibrate(left_center, right_center)
+                # Add these keys for adjusting configuration directly from the game
+                elif key == ord('i'):
+                    global_config['movement_unit'] = min(50, global_config['movement_unit'] + 1)
+                    print(f"Movement unit increased to: {global_config['movement_unit']}")
+                elif key == ord('d'):
+                    global_config['movement_unit'] = max(1, global_config['movement_unit'] - 1)
+                    print(f"Movement unit decreased to: {global_config['movement_unit']}")
+                elif key == ord('w'):
+                    global_config['vertical_sensitivity'] = min(5.0, global_config['vertical_sensitivity'] + 0.1)
+                    print(f"Vertical sensitivity increased to: {global_config['vertical_sensitivity']:.2f}")
+                elif key == ord('s'):
+                    try:
+                        save_global_configuration()  # Save configuration when 's' is pressed
+                    except NameError:
+                        print("Warning: save_global_configuration function not available")
+                elif key == ord('e'):
+                    global_config['vertical_sensitivity'] = max(0.1, global_config['vertical_sensitivity'] - 0.1)
+                    print(f"Vertical sensitivity decreased to: {global_config['vertical_sensitivity']:.2f}")
+                elif key == ord('a'):
+                    global_config['horizontal_sensitivity'] = min(5.0, global_config['horizontal_sensitivity'] + 0.1)
+                    print(f"Horizontal sensitivity increased to: {global_config['horizontal_sensitivity']:.2f}")
+                elif key == ord('f'):
+                    global_config['horizontal_sensitivity'] = max(0.1, global_config['horizontal_sensitivity'] - 0.1)
+                    print(f"Horizontal sensitivity decreased to: {global_config['horizontal_sensitivity']:.2f}")
+                elif key == ord('z'):
+                    global_config['smoothing'] = min(0.9, global_config['smoothing'] + 0.05)
+                    print(f"Smoothing increased to: {global_config['smoothing']:.2f}")
+                elif key == ord('x'):
+                    global_config['smoothing'] = max(0.05, global_config['smoothing'] - 0.05)
+                    print(f"Smoothing decreased to: {global_config['smoothing']:.2f}")
 
-        except Exception as e:
-            print(f"Error occurred: {str(e)}")
         finally:
-            self.cleanup()
+            self.cap.release()
+            cv2.destroyAllWindows()
 
-    def cleanup(self):
-        self.cap.release()
-        cv2.destroyAllWindows()
 
 class EyeTrackingKeyboard:
     def __init__(self):
@@ -247,13 +375,12 @@ class EyeTrackingKeyboard:
         self.last_key = None
         self.last_key_time = 0
 
-        # Cursor parameters
+        # Cursor parameters - use global configuration
         self.cursor_x = self.window_width // 2
         self.cursor_y = self.window_height // 2
-        self.movement_unit = 10
-        self.vertical_sensitivity = 1.0
-        self.horizontal_sensitivity = 1.0
-        self.smoothing = 0.2
+
+        # Use smoothing from global configuration
+        self.smoothing = global_config['smoothing']
 
         # Camera setup
         self.cap = cv2.VideoCapture(0)
@@ -288,7 +415,7 @@ class EyeTrackingKeyboard:
 
         # Calculate EAR
         ear = (self.distance(points[1], points[5]) + self.distance(points[2], points[4])) / (
-                    2 * self.distance(points[0], points[3]))
+                2 * self.distance(points[0], points[3]))
         return ear
 
     def distance(self, p1, p2):
@@ -389,7 +516,8 @@ class EyeTrackingKeyboard:
         self.cursor_x = self.window_width // 2
         self.cursor_y = self.window_height // 2
         self.calibrated = True
-        print("Calibration complete - Look at keys and hold gaze or blink to select")
+        print(f"Calibration complete - Movement unit: {global_config['movement_unit']} pixels")
+        print("Look at keys and hold gaze or blink to select")
 
     def calculate_movement(self, left_center, right_center):
         if not self.calibrated:
@@ -401,17 +529,17 @@ class EyeTrackingKeyboard:
         left_dev_y = left_center[1] - self.center_left_eye[1]
         right_dev_y = right_center[1] - self.center_right_eye[1]
 
-        # Average deviation scaled by movement unit and sensitivities
-        dx = ((left_dev_x + right_dev_x) / 2) * self.movement_unit * self.horizontal_sensitivity
-        dy = ((left_dev_y + right_dev_y) / 2) * self.movement_unit * self.vertical_sensitivity
+        # Average deviation scaled by movement unit and sensitivities from global config
+        dx = ((left_dev_x + right_dev_x) / 2) * global_config['movement_unit'] * global_config['horizontal_sensitivity']
+        dy = ((left_dev_y + right_dev_y) / 2) * global_config['movement_unit'] * global_config['vertical_sensitivity']
 
         return dx, dy
 
     def smooth_movement(self, x, y):
-        self.moving_avg_x = (self.moving_avg_x * (1 - self.smoothing) +
-                             x * self.smoothing)
-        self.moving_avg_y = (self.moving_avg_y * (1 - self.smoothing) +
-                             y * self.smoothing)
+        self.moving_avg_x = (self.moving_avg_x * (1 - global_config['smoothing']) +
+                             x * global_config['smoothing'])
+        self.moving_avg_y = (self.moving_avg_y * (1 - global_config['smoothing']) +
+                             y * global_config['smoothing'])
         return self.moving_avg_x, self.moving_avg_y
 
     def draw_interface(self, frame):
@@ -427,16 +555,17 @@ class EyeTrackingKeyboard:
             cv2.circle(frame, (self.window_width // 2, self.window_height // 2),
                        10, (255, 0, 0), -1)
 
-        # Draw controls info
+        # Draw controls info using global config values
         controls = [
             "Controls:",
             "i/d: increase/decrease movement speed",
-            "w/s: increase/decrease vertical sensitivity",
+            "w/e: increase/decrease vertical sensitivity",
             "a/f: increase/decrease horizontal sensitivity",
+            "s: save configuration",
             "q: quit",
-            f"Movement Speed: {self.movement_unit}",
-            f"V-Sensitivity: {self.vertical_sensitivity:.1f}",
-            f"H-Sensitivity: {self.horizontal_sensitivity:.1f}"
+            f"Movement Speed: {global_config['movement_unit']}",
+            f"V-Sensitivity: {global_config['vertical_sensitivity']:.1f}",
+            f"H-Sensitivity: {global_config['horizontal_sensitivity']:.1f}"
         ]
 
         for i, text in enumerate(controls):
@@ -447,6 +576,13 @@ class EyeTrackingKeyboard:
         print("Starting Eye-Tracking Keyboard...")
         print("Look at the center blue dot and press 'c' to calibrate")
         print("Hold gaze for 3 seconds or blink to select a key")
+        print("Press 'i' to increase movement unit")
+        print("Press 'd' to decrease movement unit")
+        print("Press 'w' to increase vertical sensitivity")
+        print("Press 'e' to decrease vertical sensitivity")
+        print("Press 's' to save configuration")
+        print("Press 'a' to increase horizontal sensitivity")
+        print("Press 'f' to decrease horizontal sensitivity")
         print("Press 'q' to quit")
 
         try:
@@ -494,17 +630,26 @@ class EyeTrackingKeyboard:
                 elif key == ord('c') and results.multi_face_landmarks:
                     self.calibrate(left_center, right_center)
                 elif key == ord('i'):
-                    self.movement_unit = min(50, self.movement_unit + 1)
+                    global_config['movement_unit'] = min(50, global_config['movement_unit'] + 1)
+                    print(f"Movement unit increased to: {global_config['movement_unit']}")
                 elif key == ord('d'):
-                    self.movement_unit = max(1, self.movement_unit - 1)
+                    global_config['movement_unit'] = max(1, global_config['movement_unit'] - 1)
+                    print(f"Movement unit decreased to: {global_config['movement_unit']}")
                 elif key == ord('w'):
-                    self.vertical_sensitivity = min(5.0, self.vertical_sensitivity + 0.1)
-                elif key == ord('s'):
-                    self.vertical_sensitivity = max(0.1, self.vertical_sensitivity - 0.1)
+                    global_config['vertical_sensitivity'] = min(5.0, global_config['vertical_sensitivity'] + 0.1)
+                    print(f"Vertical sensitivity increased to: {global_config['vertical_sensitivity']:.2f}")
+                elif key == ord('e'):
+                    global_config['vertical_sensitivity'] = max(0.1, global_config['vertical_sensitivity'] - 0.1)
+                    print(f"Vertical sensitivity decreased to: {global_config['vertical_sensitivity']:.2f}")
                 elif key == ord('a'):
-                    self.horizontal_sensitivity = min(5.0, self.horizontal_sensitivity + 0.1)
+                    global_config['horizontal_sensitivity'] = min(5.0, global_config['horizontal_sensitivity'] + 0.1)
+                    print(f"Horizontal sensitivity increased to: {global_config['horizontal_sensitivity']:.2f}")
                 elif key == ord('f'):
-                    self.horizontal_sensitivity = max(0.1, self.horizontal_sensitivity - 0.1)
+                    global_config['horizontal_sensitivity'] = max(0.1, global_config['horizontal_sensitivity'] - 0.1)
+                    print(f"Horizontal sensitivity decreased to: {global_config['horizontal_sensitivity']:.2f}")
+                elif key == ord('s'):
+                    save_global_configuration()  # Save configuration when 's' is pressed
+                    print("Configuration saved successfully.")
 
         except Exception as e:
             print(f"Error occurred: {str(e)}")
@@ -536,6 +681,43 @@ class EyeTrackingKeyboard:
         cv2.destroyAllWindows()
 
 
+# Global configuration dictionary that can be accessed by other classes
+global_config = {
+    "movement_unit": 10,
+    "vertical_sensitivity": 1.0,
+    "horizontal_sensitivity": 1.0,
+    "smoothing": 0.2
+}
+
+
+def save_global_configuration():
+    """
+    Save the global configuration to a file that persists across program runs
+    """
+    config_file = "eye_tracker_config.json"
+    with open(config_file, "w") as f:
+        json.dump(global_config, f, indent=4)
+    print(f"Global configuration saved to {config_file}.")
+
+
+def load_global_configuration():
+    """
+    Load the global configuration from file
+    """
+    config_file = "eye_tracker_config.json"
+    if os.path.exists(config_file):
+        with open(config_file, "r") as f:
+            loaded_config = json.load(f)
+            # Update the global config with loaded values
+            global_config.update(loaded_config)
+            print(f"Global configuration loaded from {config_file}.")
+    else:
+        print("No configuration file found. Using default values.")
+
+
+# Load configuration at module import time
+load_global_configuration()
+
 
 class EightDirectionEyeTracker:
     def __init__(self):
@@ -554,18 +736,9 @@ class EightDirectionEyeTracker:
         cv2.namedWindow('8-Direction Eye Tracker', cv2.WINDOW_NORMAL)
         cv2.resizeWindow('8-Direction Eye Tracker', self.window_width, self.window_height)
 
-        # Cursor parameters
+        # Cursor parameters - use global configuration
         self.cursor_x = self.window_width // 2
         self.cursor_y = self.window_height // 2
-        self.movement_unit = 10  # Base movement unit in pixels
-        self.vertical_sensitivity = 1.0
-        self.horizontal_sensitivity = 1.0
-        self.smoothing = 0.2  # Smoothing factor
-
-        # Camera setup
-        self.cap = cv2.VideoCapture(0)
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
 
         # Calibration and reference points
         self.center_left_eye = None
@@ -583,28 +756,10 @@ class EightDirectionEyeTracker:
         self.LEFT_IRIS = [474, 475, 476, 477]
         self.RIGHT_IRIS = [469, 470, 471, 472]
 
-        # Load configuration if it exists
-        self.load_configuration()
-
-    def load_configuration(self):
-        config_file = "config.json"
-        if os.path.exists(config_file):
-            with open(config_file, "r") as f:
-                config = json.load(f)
-                self.movement_unit = config.get("movement_unit", 10)
-                self.vertical_sensitivity = config.get("vertical_sensitivity", 1.0)
-                self.horizontal_sensitivity = config.get("horizontal_sensitivity", 1.0)
-                print("Loaded configuration from file.")
-
-    def save_configuration(self):
-        config = {
-            "movement_unit": self.movement_unit,
-            "vertical_sensitivity": self.vertical_sensitivity,
-            "horizontal_sensitivity": self.horizontal_sensitivity
-        }
-        with open("config.json", "w") as f:
-            json.dump(config, f, indent=4)
-        print("Configuration saved.")
+        # Camera setup
+        self.cap = cv2.VideoCapture(0)
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
 
     def get_eye_centers(self, frame, landmarks):
         frame_h, frame_w = frame.shape[:2]
@@ -627,7 +782,7 @@ class EightDirectionEyeTracker:
         self.cursor_x = self.window_width // 2
         self.cursor_y = self.window_height // 2
         self.calibrated = True
-        print(f"Calibrated - Movement unit: {self.movement_unit} pixels")
+        print(f"Calibrated - Movement unit: {global_config['movement_unit']} pixels")
 
     def get_direction(self, dx, dy):
         # Determine the direction based on movement
@@ -658,17 +813,17 @@ class EightDirectionEyeTracker:
         left_dev_y = left_center[1] - self.center_left_eye[1]
         right_dev_y = right_center[1] - self.center_right_eye[1]
 
-        # Average deviation scaled by movement unit and sensitivities
-        dx = ((left_dev_x + right_dev_x) / 2) * self.movement_unit * self.horizontal_sensitivity
-        dy = ((left_dev_y + right_dev_y) / 2) * self.movement_unit * self.vertical_sensitivity
+        # Average deviation scaled by movement unit and sensitivities from global config
+        dx = ((left_dev_x + right_dev_x) / 2) * global_config['movement_unit'] * global_config['horizontal_sensitivity']
+        dy = ((left_dev_y + right_dev_y) / 2) * global_config['movement_unit'] * global_config['vertical_sensitivity']
 
         return dx, dy
 
     def smooth_movement(self, x, y):
-        self.moving_avg_x = (self.moving_avg_x * (1 - self.smoothing) +
-                             x * self.smoothing)
-        self.moving_avg_y = (self.moving_avg_y * (1 - self.smoothing) +
-                             y * self.smoothing)
+        self.moving_avg_x = (self.moving_avg_x * (1 - global_config['smoothing']) +
+                             x * global_config['smoothing'])
+        self.moving_avg_y = (self.moving_avg_y * (1 - global_config['smoothing']) +
+                             y * global_config['smoothing'])
         return self.moving_avg_x, self.moving_avg_y
 
     def draw_interface(self, frame, direction="Center"):
@@ -688,18 +843,18 @@ class EightDirectionEyeTracker:
         center_y = self.window_height // 2
         cv2.circle(frame, (center_x, center_y), 5, (255, 0, 0), -1)
 
-        # Display information
-        cv2.putText(frame, f"Movement Unit: {self.movement_unit}", (10, 30),
+        # Display information using global config values
+        cv2.putText(frame, f"Movement Unit: {global_config['movement_unit']}", (10, 30),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
         cv2.putText(frame, f"Direction: {direction}", (10, 60),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-        cv2.putText(frame, f"Vertical Sensitivity: {self.vertical_sensitivity:.2f}", (10, 90),
+        cv2.putText(frame, f"Vertical Sensitivity: {global_config['vertical_sensitivity']:.2f}", (10, 90),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-        cv2.putText(frame, f"Horizontal Sensitivity: {self.horizontal_sensitivity:.2f}", (10, 120),
+        cv2.putText(frame, f"Horizontal Sensitivity: {global_config['horizontal_sensitivity']:.2f}", (10, 120),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
         cv2.putText(frame, "i/d: increase/decrease movement", (10, 150),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-        cv2.putText(frame, "w/s: increase/decrease vertical sensitivity", (10, 180),
+        cv2.putText(frame, "w/e: increase/decrease vertical sensitivity", (10, 180),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
         cv2.putText(frame, "a/f: increase/decrease horizontal sensitivity", (10, 210),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
@@ -712,6 +867,7 @@ class EightDirectionEyeTracker:
         print("Press 'i' to increase movement unit")
         print("Press 'd' to decrease movement unit")
         print("Press 'w' to increase vertical sensitivity")
+        print("Press 'e' to decrease vertical sensitivity")
         print("Press 's' to save configuration")
         print("Press 'a' to increase horizontal sensitivity")
         print("Press 'f' to decrease horizontal sensitivity")
@@ -745,8 +901,8 @@ class EightDirectionEyeTracker:
                         self.cursor_y = max(0, min(self.window_height, new_y))
 
                         # Get and display direction
-                        direction = self.get_direction(dx / self.movement_unit,
-                                                       dy / self.movement_unit)
+                        direction = self.get_direction(dx / global_config['movement_unit'],
+                                                       dy / global_config['movement_unit'])
 
                     # Draw eye centers
                     cv2.circle(frame, (int(left_center[0]), int(left_center[1])),
@@ -764,22 +920,25 @@ class EightDirectionEyeTracker:
                     if results.multi_face_landmarks:
                         self.calibrate(left_center, right_center)
                 elif key == ord('i'):
-                    self.movement_unit = min(50, self.movement_unit + 1)
-                    print(f"Movement unit increased to: {self.movement_unit}")
+                    global_config['movement_unit'] = min(50, global_config['movement_unit'] + 1)
+                    print(f"Movement unit increased to: {global_config['movement_unit']}")
                 elif key == ord('d'):
-                    self.movement_unit = max(1, self.movement_unit - 1)
-                    print(f"Movement unit decreased to: {self.movement_unit}")
+                    global_config['movement_unit'] = max(1, global_config['movement_unit'] - 1)
+                    print(f"Movement unit decreased to: {global_config['movement_unit']}")
                 elif key == ord('w'):
-                    self.vertical_sensitivity = min(5.0, self.vertical_sensitivity + 0.1)
-                    print(f"Vertical sensitivity increased to: {self.vertical_sensitivity:.2f}")
+                    global_config['vertical_sensitivity'] = min(5.0, global_config['vertical_sensitivity'] + 0.1)
+                    print(f"Vertical sensitivity increased to: {global_config['vertical_sensitivity']:.2f}")
                 elif key == ord('s'):
-                    self.save_configuration()  # Save configuration when 's' is pressed
+                    save_global_configuration()  # Save configuration when 's' is pressed
+                elif key == ord('e'):
+                    global_config['vertical_sensitivity'] = max(0.1, global_config['vertical_sensitivity'] - 0.1)
+                    print(f"Vertical sensitivity decreased to: {global_config['vertical_sensitivity']:.2f}")
                 elif key == ord('a'):
-                    self.horizontal_sensitivity = min(5.0, self.horizontal_sensitivity + 0.1)
-                    print(f"Horizontal sensitivity increased to: {self.horizontal_sensitivity:.2f}")
+                    global_config['horizontal_sensitivity'] = min(5.0, global_config['horizontal_sensitivity'] + 0.1)
+                    print(f"Horizontal sensitivity increased to: {global_config['horizontal_sensitivity']:.2f}")
                 elif key == ord('f'):
-                    self.horizontal_sensitivity = max(0.1, self.horizontal_sensitivity - 0.1)
-                    print(f"Horizontal sensitivity decreased to: {self.horizontal_sensitivity:.2f}")
+                    global_config['horizontal_sensitivity'] = max(0.1, global_config['horizontal_sensitivity'] - 0.1)
+                    print(f"Horizontal sensitivity decreased to: {global_config['horizontal_sensitivity']:.2f}")
 
         except Exception as e:
             print(f"Error occurred: {str(e)}")
@@ -795,8 +954,18 @@ class MainApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Eye Tracking Control Panel")
-        self.root.geometry("600x400")
-        self.root.configure(bg="#2c3e50")
+        self.root.geometry("800x600")  # Adjust as needed
+        self.root.state("zoomed")  # Make window maximized without full screen
+
+        # Load and display the background image
+        self.bg_image = Image.open("img.png")  # Ensure img.png is in the same directory
+        self.bg_image = self.bg_image.resize((self.root.winfo_screenwidth(), self.root.winfo_screenheight()))
+        self.bg_image_tk = ImageTk.PhotoImage(self.bg_image)
+
+        # Create a Canvas and place the background image
+        self.canvas = tk.Canvas(self.root, width=self.root.winfo_screenwidth(), height=self.root.winfo_screenheight())
+        self.canvas.pack(fill="both", expand=True)
+        self.canvas.create_image(0, 0, image=self.bg_image_tk, anchor="nw")
 
         # Title Label
         title_label = tk.Label(
@@ -804,13 +973,13 @@ class MainApp:
             text="Eye Tracking System",
             font=("Helvetica", 24, "bold"),
             fg="white",
-            bg="#2c3e50"
+            bg="black"
         )
-        title_label.pack(pady=20)
+        title_label.place(relx=0.5, rely=0.1, anchor="center")
 
         # Buttons Frame
-        button_frame = tk.Frame(self.root, bg="#2c3e50")
-        button_frame.pack(pady=50)
+        button_frame = tk.Frame(self.root, bg="black")
+        button_frame.place(relx=0.5, rely=0.5, anchor="center")
 
         # Check Cam Button
         cam_button = tk.Button(
@@ -860,9 +1029,9 @@ class MainApp:
             text="Select an option to proceed",
             font=("Helvetica", 14),
             fg="white",
-            bg="#2c3e50"
+            bg="black"
         )
-        footer_label.pack(pady=10)
+        footer_label.place(relx=0.5, rely=0.9, anchor="center")
 
     def open_cam(self):
         try:
